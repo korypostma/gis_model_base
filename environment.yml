@@ -1,0 +1,41 @@
+##conda env create -f environment.yml
+##conda activate rcmap
+
+##conda --add channels conda-forge
+##conda --set channel_priority strict
+##conda install XXX
+
+##pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org tensorflow
+##To upgrade tensorflow run this command twice
+##pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org tensorflow --upgrade
+
+##On VS33x machine we need to run the following after this
+##conda install -c conda-forge mpi4py
+name: rcmap
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - gdal=3.5.0
+  - geos=3.10.2
+  - ipykernel=6.13.0
+  - ipython=8.3.0
+  - jupyter=1.0.0
+  - matplotlib=3.5.2
+  - numpy=1.22.4
+  - pandas=1.4.2
+  - pip=22.1.1
+  - psutil=5.9.1
+  - python=3.10.4
+  - scikit-learn=1.1.1
+  - scipy=1.8.1
+  - tqdm=4.64.0
+  - pip:
+    - --trusted-host pypi.org
+    - --trusted-host files.pythonhosted.org
+    - eli5
+    - keras==2.9.0
+    - keras-preprocessing==1.1.2
+    - keras-tuner==1.1.2
+    - mpi4py
+    - tensorflow==2.9.1
