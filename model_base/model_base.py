@@ -221,7 +221,8 @@ def worker_process_blocks(ds_in, min_extent, func, focal_size, args=None):
 
 def get_data(key, dskey, block, bands, offsets, focal_size, no_data):
     if (focal_size <= 1):
-        return (bands[key].ReadAsArray(offsets[dskey][0]+block.x, offsets[dskey][1]+block.y, block.cols, block.rows)).astype(float)
+        #return (bands[key].ReadAsArray(offsets[dskey][0]+block.x, offsets[dskey][1]+block.y, block.cols, block.rows)).astype(float)
+        return bands[key].ReadAsArray(offsets[dskey][0]+block.x, offsets[dskey][1]+block.y, block.cols, block.rows)
 
     x_size = bands[key].XSize
     y_size = bands[key].YSize
@@ -271,7 +272,8 @@ def get_data(key, dskey, block, bands, offsets, focal_size, no_data):
 
     #print('key=',key,'x=',x,'y=',y,'cols=',cols,'rows=',rows,'x_offset=',x_offset,'y_offset=',y_offset)
     #print('y=',int(y_offset),int(y_offset+rows),'x=',int(x_offset),int(x_offset+cols))
-    data[int(y_offset):int(y_offset+rows),int(x_offset):int(x_offset+cols)] = (bands[key].ReadAsArray(int(x), int(y), int(cols), int(rows))).astype(float)
+    #data[int(y_offset):int(y_offset+rows),int(x_offset):int(x_offset+cols)] = (bands[key].ReadAsArray(int(x), int(y), int(cols), int(rows))).astype(float)
+    data[int(y_offset):int(y_offset+rows),int(x_offset):int(x_offset+cols)] = bands[key].ReadAsArray(int(x), int(y), int(cols), int(rows))
 
     return data
 
