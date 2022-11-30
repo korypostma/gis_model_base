@@ -40,7 +40,7 @@ def extract_key_band(key):
         raise SystemExit(1)
     return (dskey, int(band_num))
 
-def master_process_blocks(ds_in, ds_out, min_extent, force_blocksize):
+def master_process_blocks(ds_in, ds_out, in_extent, force_blocksize):
     """
     Used to give blocks to worker MPI processes to produce ds_out output for the master MPI process
     """
@@ -49,8 +49,8 @@ def master_process_blocks(ds_in, ds_out, min_extent, force_blocksize):
     mpi_size = mpi_world.size
     outputs_time = 0.0
 
-    SIZE_X = int(min_extent[4])
-    SIZE_Y = int(min_extent[5])
+    SIZE_X = int(in_extent[4])
+    SIZE_Y = int(in_extent[5])
     BLK_SZ_X = 0
     BLK_SZ_Y = 0
 
@@ -74,7 +74,7 @@ def master_process_blocks(ds_in, ds_out, min_extent, force_blocksize):
     BLK_SZ_Y = min(BLK_SZ_Y, SIZE_Y)
 
     #Calculate offsets for each band
-    offsets = get_extent_offsets(min_extent, ds_in)
+    offsets = get_extent_offsets(in_extent, ds_in)
     #Go through each block and process it
     total_blocks = (math.ceil(SIZE_X / BLK_SZ_X) * math.ceil(SIZE_Y / BLK_SZ_Y))
     list_of_blocks = []
@@ -83,17 +83,6 @@ def master_process_blocks(ds_in, ds_out, min_extent, force_blocksize):
         rows = min(BLK_SZ_Y, SIZE_Y - y)
         for x in range(0, SIZE_X, BLK_SZ_X):
             cols = min(BLK_SZ_X, SIZE_X - x)
-
-            for key,band in bands.items():
-                (dskey, band_num) = extract_key_band(key)
-                x_size = bands[key].XSize
-                y_size = bands[key].YSize
-                if (offsets[dskey][0]+x+cols > x_size):
-                    print('x:{} + cols:{} + offset:{} exceeds max:{} for {}'.format(x, cols, offsets[dskey][0], x_size, dskey))
-                    raise SystemExit(1)
-                if (offsets[dskey][1]+y+rows > y_size):
-                    print('y:{} + rows:{} + offset:{} exceeds max:{} for {}'.format(y, rows, offsets[dskey][1], y_size, dskey))
-                    raise SystemExit(1)
             list_of_blocks.append(Block(x,cols,y,rows))
 
     n_blocks = len(list_of_blocks)
@@ -186,7 +175,7 @@ def master_process_blocks(ds_in, ds_out, min_extent, force_blocksize):
     print('Outputs Write time:',outputs_time,'secs',timedelta(seconds=outputs_time))
     return True
 
-def worker_process_blocks(ds_in, min_extent, func, focal_size, args=None):
+def worker_process_blocks(ds_in, in_extent, func, focal_size, args=None):
     from mpi4py import MPI
     mpi_world = MPI.COMM_WORLD
     bands = {}
@@ -198,7 +187,7 @@ def worker_process_blocks(ds_in, min_extent, func, focal_size, args=None):
             bands[implant_key_band(key, i+1)] = band
 
     #Calculate offsets for each band
-    offsets = get_extent_offsets(min_extent, ds_in, verbose=False)
+    offsets = get_extent_offsets(in_extent, ds_in, verbose=False)
 
     b_continue = mpi_world.recv(source=0)
     while b_continue:
@@ -220,9 +209,10 @@ def worker_process_blocks(ds_in, min_extent, func, focal_size, args=None):
     return True
 
 def get_data(key, dskey, block, bands, offsets, focal_size, no_data):
-    if (focal_size <= 1):
-        #return (bands[key].ReadAsArray(offsets[dskey][0]+block.x, offsets[dskey][1]+block.y, block.cols, block.rows)).astype(float)
-        return bands[key].ReadAsArray(offsets[dskey][0]+block.x, offsets[dskey][1]+block.y, block.cols, block.rows)
+    #TODO this code has been modified to support custom extents (max, AOI, custom) and may not work in all cases, we will have to fix those cases where it fails
+    this_offset = offsets[dskey]
+    if (focal_size < 1):
+        focal_size = 1
 
     x_size = bands[key].XSize
     y_size = bands[key].YSize
@@ -230,13 +220,13 @@ def get_data(key, dskey, block, bands, offsets, focal_size, no_data):
     focal_even = (focal_size+1) % 2
     top_left_offset = (focal_size-focal_even)//2
     bottom_right_offset = (focal_size-focal_odd)//2
-    cols = min(block.cols, x_size-block.x)
-    rows = min(block.rows, y_size-block.y)
+    #NOTE the old code only worked for min_extent, for supporting both we need to always output the expected number of cols and rows given from the block
+    cols = block.cols
+    rows = block.rows
     if (no_data is None):
         no_data = 0.0
     #data = np.full(shape=(cols+focal_size-1, rows+focal_size-1), fill_value=no_data)
     data = np.full(shape=(rows+top_left_offset+bottom_right_offset, cols+top_left_offset+bottom_right_offset), fill_value=no_data)
-    #print('key=',key,'focal_stats: get_data: data.shape=',data.shape)
 
     #Check left-hand side of x/cols
     left_x = offsets[dskey][0] + block.x - top_left_offset
@@ -269,6 +259,10 @@ def get_data(key, dskey, block, bands, offsets, focal_size, no_data):
     else:
         rows_offset = 0
     rows = top_left_offset + rows + bottom_right_offset - rows_offset - y_offset
+
+    if (cols < 0) or (rows < 0):
+        #return no_data filled data if both cols and rows is filled with zeroes
+        return data
 
     #print('key=',key,'x=',x,'y=',y,'cols=',cols,'rows=',rows,'x_offset=',x_offset,'y_offset=',y_offset)
     #print('y=',int(y_offset),int(y_offset+rows),'x=',int(x_offset),int(x_offset+cols))
@@ -319,7 +313,7 @@ def worker_process_block(block, bands, offsets, func, focal_size, args=None):
 
     return results
 
-def non_mpi_process_blocks(ds_in, ds_out, min_extent, focal_size, force_blocksize, func, args=None):
+def non_mpi_process_blocks(ds_in, ds_out, in_extent, focal_size, force_blocksize, func, args=None):
     """
     Used to call func on the bands to produce ds_out output
     """
@@ -329,8 +323,8 @@ def non_mpi_process_blocks(ds_in, ds_out, min_extent, focal_size, force_blocksiz
 
     #This is here for testing purposes and should normally always be true
     allow_processing = True
-    SIZE_X = int(min_extent[4])
-    SIZE_Y = int(min_extent[5])
+    SIZE_X = int(in_extent[4])
+    SIZE_Y = int(in_extent[5])
     BLK_SZ_X = 0
     BLK_SZ_Y = 0
 
@@ -354,7 +348,7 @@ def non_mpi_process_blocks(ds_in, ds_out, min_extent, focal_size, force_blocksiz
     BLK_SZ_Y = min(BLK_SZ_Y, SIZE_Y)
 
     #Calculate offsets for each band
-    offsets = get_extent_offsets(min_extent, ds_in)
+    offsets = get_extent_offsets(in_extent, ds_in)
     #Go through each block and process it
     total_blocks = (math.ceil(SIZE_X / BLK_SZ_X) * math.ceil(SIZE_Y / BLK_SZ_Y))
     print('Raster Size: {}x{}\nBlock Size: {}x{}'.format(SIZE_X,SIZE_Y,BLK_SZ_X,BLK_SZ_Y))
@@ -364,16 +358,6 @@ def non_mpi_process_blocks(ds_in, ds_out, min_extent, focal_size, force_blocksiz
         for x in range(0, SIZE_X, BLK_SZ_X):
             cols = min(BLK_SZ_X, SIZE_X - x)
 
-            for key,band in bands.items():
-                (dskey, band_num) = extract_key_band(key)
-                x_size = bands[key].XSize
-                y_size = bands[key].YSize
-                if (offsets[dskey][0]+x+cols > x_size):
-                    print('x:{} + cols:{} + offset:{} exceeds max:{} for {}'.format(x, cols, offsets[dskey][0], x_size, dskey))
-                    raise SystemExit(1)
-                if (offsets[dskey][1]+y+rows > y_size):
-                    print('y:{} + rows:{} + offset:{} exceeds max:{} for {}'.format(y, rows, offsets[dskey][1], y_size, dskey))
-                    raise SystemExit(1)
             if allow_processing:
                 #Read in the band to operate func on and setup mask
                 #in_data = np.zeros((rows, cols, BAND_COUNT), dtype=float)
@@ -436,6 +420,44 @@ def non_mpi_process_blocks(ds_in, ds_out, min_extent, focal_size, force_blocksiz
     print('Outputs Write time:',outputs_time,'secs',timedelta(seconds=outputs_time))
     return True
 
+def get_max_extent(ds_in, verbose=True):
+    base_ds = ds_in[next(iter(ds_in))]
+    geo = base_ds.GetGeoTransform()
+    x_min = geo[0]
+    x_res = geo[1]
+    y_min = geo[3]
+    y_res = geo[5]
+    x_size = base_ds.RasterXSize
+    y_size = base_ds.RasterYSize
+    x_max = x_min + x_res * x_size
+    y_max = y_min + y_res * y_size
+    for key,ds in ds_in.items():
+        geo = ds.GetGeoTransform()
+        size = (ds.RasterXSize, ds.RasterYSize)
+        geo_max = (geo[0] + geo[1] * size[0], geo[3] + geo[5] * size[1])
+        if verbose:
+            print("{}: geo:{} size:{},{} geo_max:{}".format(key,geo,size[0],size[1],geo_max))
+        if ((abs(x_res - geo[1]) > 1e-4) or (abs(y_res - geo[5]) > 1e-4)):
+            print("Both x and y resolution must be the same, failed on:",ds.GetDescription())
+            sys.exit(2)
+        if (x_res >= 0.0):
+            x_min = min(x_min, geo[0])
+            x_max = max(x_max, geo_max[0])
+        else:
+            x_min = max(x_min, geo[0])
+            x_max = min(x_max, geo_max[0])
+        if (y_res >= 0.0):
+            y_min = min(y_min, geo[3])
+            y_max = max(y_max, geo_max[1])
+        else:
+            y_min = max(y_min, geo[3])
+            y_max = min(y_max, geo_max[1])
+
+    max_extent = (x_min, y_min, x_max, y_max, abs((x_max - x_min) / x_res), abs((y_max - y_min) / y_res))
+    if verbose:
+        print("Max Extent(xm,ym,xM,yM,sz_x,sz_y):",max_extent)
+    return max_extent
+
 def get_min_extent(ds_in, verbose=True):
     base_ds = ds_in[next(iter(ds_in))]
     geo = base_ds.GetGeoTransform()
@@ -470,19 +492,51 @@ def get_min_extent(ds_in, verbose=True):
         if (y_min > geo_max[1] and geo_max[1] > y_max):
             y_max = geo_max[1]
 
-    #TODO - check if we need to use both x_res or if the latter should be y_res
-    min_extent = (x_min, y_min, x_max, y_max, abs((x_max - x_min) / x_res), abs((y_max - y_min) / x_res))
+    min_extent = (x_min, y_min, x_max, y_max, abs((x_max - x_min) / x_res), abs((y_max - y_min) / y_res))
     if verbose:
         print('Min Extent(xm,ym,xM,yM,sz_x,sz_y):',min_extent)
     return min_extent
 
-def get_extent_offsets(min_extent, ds_in, verbose=True):
-    (x_min, y_min, x_max, y_max, x_size, y_size) = min_extent
+def round_extent(extent):
+    return (round(extent[0]),round(extent[1]),round(extent[2]),round(extent[3]),round(extent[4]),round(extent[5]))
+
+def get_extent_from_parameter(extent, ds_in, verbose=True):
+    if verbose:
+        print('Loading extent from',extent)
+    if type(extent) is tuple:
+        if (len(extent) == 6):
+            return extent
+        else:
+            print('ERROR: extent parameter is a tuple but not of length 6, len=',len(extent),'extent=',extent)
+            raise SystemExit(3)
+    if type(extent) is str:
+        if (extent == 'min'):
+            return get_min_extent(ds_in, verbose=verbose)
+        if (extent == 'max'):
+            return get_max_extent(ds_in, verbose=verbose)
+        ds = load_ds(extent, verbose=verbose)
+        if ds is None:
+            print('ERROR: unable to load raster of extent parameter: extent=',extent)
+            raise SystemExit(3)
+        return get_min_extent({'aoi':ds}, verbose=verbose)
+    print('ERROR: extent parameter is not one of min, max, tuple, or str: extent=',extent)
+    raise SystemExit(3)
+
+def get_extent_offsets(in_extent, ds_in, verbose=True):
+    (x_min, y_min, x_max, y_max, x_size, y_size) = in_extent
     offsets = {}
     i = 0
     for key,ds in ds_in.items():
         geo = ds.GetGeoTransform()
-        offset = (abs((geo[0] - x_min) / geo[1]), abs((geo[3] - y_min) / geo[5]))
+        #NOTE this only works when using get_min_extent, so we use the following code instead to support both min/max
+        #offset = (abs((geo[0] - x_min) / geo[1]), abs((geo[3] - y_min) / geo[5]))
+        offset = (round((x_min - geo[0]) / geo[1]), round((y_min - geo[3]) / geo[5]))
+        #if verbose:
+        #    print('============================')
+        #    print('key=',key)
+        #    print('in_extent=',in_extent)
+        #    print('geo=',geo)
+        #    print('offset=',offset)
         offsets[key] = tuple(offset)
         if verbose:
             print('{}: offsets:{}'.format(key,offsets[key]))
@@ -516,7 +570,18 @@ def create(path, rows, cols, affine, datatype, proj, bands, driver='HFA', option
 
     return ds
 
-def main(input_files, output_parameters, func, focal_size=1, force_non_mpi=False, force_blocksize=None, gdal_cachemax=1536*1024*1024, args=None):
+def main(input_files, output_parameters, func, extent='min', focal_size=1, force_non_mpi=False, force_blocksize=None, gdal_cachemax=1536*1024*1024, args=None):
+    """
+    input_files:
+    output_parameters:
+    func: model function to use
+    extent: one of 'min','max',tuple (in this format Top Left x, y, Bottom Right x, y, Raster Size x, y), string pointing to raster to use as AOI
+    focal_size: when running focal stats what is the size of the focal kernel, this will return focal_size//2 extra pixels around the blocksize
+    force_non_mpi: set to True to run in single-threaded mode regardless of availability of MPI
+    force_blocksize: a tuple of size 2 used to set the blocksize for all blocks, edge blocks may still be smaller
+    gdal_cachemax: parameter used to configure how much cache gdal should use
+    args: keyword args (kwargs) to pass down to the model function set in the func parameter
+    """
     try:
         from mpi4py import MPI
         mpi_world = MPI.COMM_WORLD
@@ -529,11 +594,11 @@ def main(input_files, output_parameters, func, focal_size=1, force_non_mpi=False
         mpi_size = 1
 
     if (mpi_size <= 1) or (force_non_mpi is True):
-        non_mpi_main(input_files=input_files, output_parameters=output_parameters, func=func, focal_size=focal_size, force_blocksize=force_blocksize, gdal_cachemax=gdal_cachemax, args=args)
+        non_mpi_main(input_files=input_files, output_parameters=output_parameters, func=func, extent=extent, focal_size=focal_size, force_blocksize=force_blocksize, gdal_cachemax=gdal_cachemax, args=args)
     else:
-        mpi_main(input_files=input_files, output_parameters=output_parameters, func=func, focal_size=focal_size, force_blocksize=force_blocksize, gdal_cachemax=gdal_cachemax, args=args)
+        mpi_main(input_files=input_files, output_parameters=output_parameters, func=func, extent=extent, focal_size=focal_size, force_blocksize=force_blocksize, gdal_cachemax=gdal_cachemax, args=args)
 
-def non_mpi_main(input_files, output_parameters, func, focal_size, force_blocksize=None, gdal_cachemax=1536*1024*1024, args=None):
+def non_mpi_main(input_files, output_parameters, func, extent, focal_size, force_blocksize=None, gdal_cachemax=1536*1024*1024, args=None):
     start_time = time.perf_counter()
     (output_files, output_datatypes, output_band_counts, output_drivers, output_options) = output_parameters
     gdal.SetCacheMax(gdal_cachemax) #Default 4,096 MB
@@ -590,12 +655,14 @@ def non_mpi_main(input_files, output_parameters, func, focal_size, force_blocksi
 
     print('================================================================================')
 
-    min_extent = get_min_extent(ds_in)
+    in_extent = get_extent_from_parameter(extent, ds_in)
+    print('in_extent=',in_extent)
+    print('rounded in_extent=',round_extent(in_extent))
 
     #Get geo transform and set the min extent values
-    GEO = (min_extent[0], GEO[1], GEO[2], min_extent[1], GEO[4], GEO[5])
-    SIZE_X = int(min_extent[4])
-    SIZE_Y = int(min_extent[5])
+    GEO = (in_extent[0], GEO[1], GEO[2], in_extent[1], GEO[4], GEO[5])
+    SIZE_X = int(in_extent[4])
+    SIZE_Y = int(in_extent[5])
     print('Output GEO:',GEO,' Output Size:',(SIZE_X,SIZE_Y))
 
     print('================================================================================')
@@ -616,7 +683,7 @@ def non_mpi_main(input_files, output_parameters, func, focal_size, force_blocksi
     print('================================================================================')
 
     try:
-        non_mpi_process_blocks(ds_in, ds_out, min_extent, focal_size=focal_size, force_blocksize=force_blocksize, func=func, args=args)
+        non_mpi_process_blocks(ds_in, ds_out, in_extent, focal_size=focal_size, force_blocksize=force_blocksize, func=func, args=args)
     except:
         print('ERROR: Unexpected error:')
         print(sys.exc_info())
@@ -642,7 +709,7 @@ def non_mpi_main(input_files, output_parameters, func, focal_size, force_blocksi
     print('================================================================================')
     print('Total time:',total_time,'secs',timedelta(seconds=total_time))
 
-def mpi_main(input_files, output_parameters, func, focal_size, force_blocksize=None, gdal_cachemax=1536*1024*1024, args=None):
+def mpi_main(input_files, output_parameters, func, extent, focal_size, force_blocksize=None, gdal_cachemax=1536*1024*1024, args=None):
     from mpi4py import MPI
     start_time = time.perf_counter()
 
@@ -711,13 +778,15 @@ def mpi_main(input_files, output_parameters, func, focal_size, force_blocksize=N
     if mpi_master:
         print('================================================================================')
 
-    min_extent = get_min_extent(ds_in, verbose=mpi_master)
+    in_extent = get_extent_from_parameter(extent, ds_in, verbose=mpi_master)
 
     if mpi_master:
+        print('in_extent=',in_extent)
+        print('rounded in_extent=',round_extent(in_extent))
         #Get geo transform and set the min extent values
-        GEO = (min_extent[0], GEO[1], GEO[2], min_extent[1], GEO[4], GEO[5])
-        SIZE_X = int(min_extent[4])
-        SIZE_Y = int(min_extent[5])
+        GEO = (in_extent[0], GEO[1], GEO[2], in_extent[1], GEO[4], GEO[5])
+        SIZE_X = int(in_extent[4])
+        SIZE_Y = int(in_extent[5])
         print('Output GEO:',GEO,' Output Size:',(SIZE_X,SIZE_Y))
 
         print('================================================================================')
@@ -738,7 +807,7 @@ def mpi_main(input_files, output_parameters, func, focal_size, force_blocksize=N
         print('================================================================================')
 
         try:
-            master_process_blocks(ds_in, ds_out, min_extent, force_blocksize=force_blocksize)
+            master_process_blocks(ds_in, ds_out, in_extent, force_blocksize=force_blocksize)
         except:
             print('ERROR: Unexpected error:')
             print(sys.exc_info())
@@ -760,7 +829,7 @@ def mpi_main(input_files, output_parameters, func, focal_size, force_blocksize=N
             del ds_out[key]
     else: #worker process, not the master
         try:
-            worker_process_blocks(ds_in, min_extent, func=func, focal_size=focal_size, args=args)
+            worker_process_blocks(ds_in, in_extent, func=func, focal_size=focal_size, args=args)
         except:
             print('ERROR: Unexpected error:')
             print(sys.exc_info())
