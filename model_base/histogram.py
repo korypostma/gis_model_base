@@ -164,19 +164,14 @@ def global_stats_histogram(in_data, no_data):
         band_num = i+1
         band_key = 'in('+str(band_num)+')'
         in_1 = in_data[band_key]
-        if 'aoi(1)' in in_data:
-            aoi_mask = (in_data['aoi(1)'] == 0)
-            in_1[aoi_mask] = np.nan
-            del aoi_mask
-        if 'mask(1)' in in_data:
-            aoi_mask = (in_data['mask(1)'] == 1)
-            in_1[aoi_mask] = np.nan
-            del aoi_mask
         mask = (in_1 == no_data[band_key])
-        in_1[mask] = np.nan
+        if 'aoi(1)' in in_data:
+            mask = (mask | (in_data['aoi(1)'] == 0))
+        if 'mask(1)' in in_data:
+            mask = (mask | (in_data['mask(1)'] == 1))
 
         #Calculate binning of unique values for median
-        vals,cnts = np.unique(in_1.astype(glblhistogram_dtype), return_counts=True)
+        vals,cnts = np.unique(np.ma.masked_array(in_1, mask=mask).compressed().astype(glblhistogram_dtype), return_counts=True)
         for val_i in range(vals.shape[0]):
             try:
                 if glblhistogram[i] is None:
