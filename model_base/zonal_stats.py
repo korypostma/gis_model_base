@@ -326,6 +326,13 @@ def get_diversity_majority(values, ignore_vals = None):
             except KeyError:
                 pass
 
+    val_len = len(values)
+    #print('get_min_median_max input len: ', val_len)
+    if (val_len <= 0):
+        return (0, 0)
+    if (val_len == 1):
+        return (list(values.keys())[0], list(values.keys())[0])
+
     vals = list(values.keys())
     cnts = list(values.values())
     diversity = len(vals)
@@ -334,9 +341,6 @@ def get_diversity_majority(values, ignore_vals = None):
     return (diversity,majority)
 
 def get_min_median_max(values, ignore_vals = None):
-    val_len = len(values)
-    #print('get_min_median_max input len: ', val_len)
-
     if (ignore_vals is not None):
         for ignore_val in ignore_vals:
             try:
@@ -344,6 +348,8 @@ def get_min_median_max(values, ignore_vals = None):
             except KeyError:
                 pass
 
+    val_len = len(values)
+    #print('get_min_median_max input len: ', val_len)
     if (val_len <= 0):
         return (0.0, 0.0, 0.0)
     if (val_len == 1):
