@@ -104,17 +104,23 @@ class ProcessManager:
         self.name = name
         if max_process_limit is None:
             max_process_limit = self.max_processes
+        cpu_percent = '0'
         alive_count = 1
         while(alive_count > 0):
             alive_count = 0
+            waiting_count = 0
+            completed_count = 0
+            total_count = 0
             print('') #Empty line
             for p in self.processes.values():
+                total_count += 1
                 if p.pid is not None:
                     if p.is_alive():
                         alive_count += 1
                         self.duration[p.name] = timedelta(seconds=time.perf_counter() - self.start_timers[p.name])
                         print('RUNNING:',p.name,'pid:',p.pid,'is still alive','duration:',self.duration[p.name])
                     else: #No longer alive
+                        completed_count += 1
                         if self.completed[p.name] is False:
                             self.completed[p.name] = True
                             self.duration[p.name] = timedelta(seconds=time.perf_counter() - self.start_timers[p.name])
@@ -122,7 +128,8 @@ class ProcessManager:
                         else: #Already marked completed
                             print('COMPLETED:',p.name,'pid:',p.pid,'exitcode:',p.exitcode,'duration:',self.duration[p.name])
                 else: #No p.pid, still waiting to run
-                    print('WAITING:',p.name)
+                    #print('WAITING:',p.name)
+                    waiting_count += 1
             if (alive_count <= max_process_limit):
                 for p in self.processes.values():
                     if p.pid is None:
@@ -140,9 +147,10 @@ class ProcessManager:
                         break
 
             if alive_count > 0:
-                print(self.name,'alive_count:',alive_count)
+                print(self.name,'alive_count:',alive_count,'completed/total:',completed_count,'/',total_count)
                 #NOTE: the psutil.cpu_percent(x) call blocks for x seconds
-                print('\n\nCPU: ' + str(psutil.cpu_percent(self.print_status_delay)) + '% | RAM: ' + str(psutil.virtual_memory()[2]) + '% | RAM Total Usage: ' + str(psutil.virtual_memory()[0] - psutil.virtual_memory()[1]))
+                print('\n\nCPU: ' + cpu_percent + '% | RAM: ' + str(psutil.virtual_memory()[2]) + '% | RAM Total Usage: ' + str(psutil.virtual_memory()[0] - psutil.virtual_memory()[1]))
+                cpu_percent = str(psutil.cpu_percent(self.print_status_delay))
 
         has_error = False
         error_code = 0
